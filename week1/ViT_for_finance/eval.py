@@ -9,9 +9,9 @@ import pandas as pd
 
 from matplotlib import pyplot as plt  # 그래프 그리기 위한 matplotlib
 
-model_path = 'model_save/ViT.pt'
+model_path = 'model_save'
 
-model = CNN()
+model = VisionTransformer()
 etf_list = ['KRW-BTC']
 THRESHOLD = '01'
 
@@ -103,17 +103,17 @@ for etf in etf_list:
 
 
 x_test, y_test = load_dataset()
-
 datasets = make_dataset(x_test, y_test)
 
 
-models = ['model_save/.pt']
+models = ['model_save/ViT.pt']
 
 profit_ranking = []
 
 for item in models:
-    model = CNN()
-    # model.load_state_dict(torch.load(item))
+    # model = CNN()
+    model = VisionTransformer()
+    model.load_state_dict(torch.load(item))
     model.eval()
     list_of_signals = []
     for dataset in datasets:
@@ -130,9 +130,12 @@ for item in models:
         for signal, price, date in zip(signals, price, dates):
             if signal == 0:
                 wallet.buy(price, date)
+                # print("buy")
             elif signal == 1:
                 wallet.hold(price)
+                # print("hold")
             elif signal == 2:
+                # print("sell")
                 wallet.sell(price, date)
             daily_money.append(wallet.info[f"v_{wallet.base_currency_name}"])
         wallet.print_values()

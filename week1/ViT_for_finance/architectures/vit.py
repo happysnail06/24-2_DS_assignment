@@ -21,9 +21,10 @@ from timm.models.layers import trunc_normal_
     https://csm-kr.tistory.com/54
 """
 class EmbeddingLayer(nn.Module):
-    def __init__(self, img_size: int = 65, patch_size: int = 8, in_channels: int = 1, embed_dim: int = 64)-> None:
+    def __init__(self, img_size: int, patch_size: int, in_channels: int, embed_dim: int)-> None:
         super(EmbeddingLayer, self).__init__()
-        self.num_patches = (img_size // patch_size) ** 2
+        self.in_channels = in_channels
+        self.num_patches = (img_size // patch_size) ** 2 
         self.embed_dim = embed_dim
         self.patch_size = patch_size
         
@@ -33,54 +34,56 @@ class EmbeddingLayer(nn.Module):
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         trunc_normal_(self.cls_token, std=0.02)
         
-        # positional embedding
-        self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches + 1, embed_dim))
+        # positional embedding # patch 단위로 어텐션을 계산
+        self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches + 1, embed_dim)) 
         trunc_normal_(self.pos_embed, std=0.02) # not sure what this is
         
 
     def forward(self, x) -> torch.Tensor:
-        batch_size = x.size(0)
-        x = self.proj(x).flatten(2).transpose(1, 2)  # (batch_size, embed_dim, num_patches_h, num_patches_w) -> (batch_size, num_patches, embed_dim)
+        if x.dim() == 4 and x.shape[-1] == self.in_channels:
+            x = x.permute(0, 3, 1, 2)
+            
+        batch_size, b, h, channels = x.shape
         
-        cls_tokens = self.cls_token.expand(batch_size, -1, -1)  # (batch_size, 1, embed_dim)
+        x = self.proj(x)
+        x = x.flatten(2).transpose(1, 2)
         
-        x = torch.cat((cls_tokens, x), dim=1)  #(batch_size, num_patches + 1, embed_dim)
+        cls_tokens = self.cls_token.expand(batch_size, -1, -1)
         
-        x = x + self.pos_embed  #(batch_size, num_patches + 1, embed_dim)
+        x = torch.cat([cls_tokens, x], dim=1)
+        
+        x = x + self.pos_embed 
         return x
 
 class MultiHeadSelfAttention(nn.Module):
-    def __init__(self, embed_dim: int = 64, num_heads: int = 4, dropout: float = 0.1, qkv_bias=False) -> None:
+    def __init__(self, embed_dim: int, num_heads: int, dropout: float = 0.1) -> None:
         super(MultiHeadSelfAttention, self).__init__()
-        assert embed_dim % num_heads == 0, 'dim should be divisible by num_heads'
+        assert embed_dim % num_heads == 0
         self.num_heads = num_heads
         self.head_dim = embed_dim // num_heads
-        self.embed_dim = embed_dim
         self.scale = self.head_dim ** -0.5
-        self.dropout = dropout
         
-        self.qkv = nn.Linear(embed_dim, embed_dim * 3, bias=qkv_bias)
+        self.qkv = nn.Linear(embed_dim, embed_dim * 3)
         self.attn_dropout = nn.Dropout(dropout)
         
         self.proj = nn.Linear(embed_dim, embed_dim)
         self.proj_dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        batch_size, seq_length, embed_dim = x.size()
+        batch_size, seq_len, embed_dim = x.shape
         
         # Q, K, V
         qkv = self.qkv(x)
-        qkv = qkv.reshape(batch_size, seq_length, 3, self.num_heads, self.head_dim)
+        qkv = qkv.reshape(batch_size, seq_len, 3, self.num_heads, embed_dim // self.num_heads)
         qkv = qkv.permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]
         q, k, v = qkv.unbind(0)
         
         # Compute scaled dot-product attention
-        scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale  # (batch_size, num_heads, seq_length, seq_length)
-        probs = F.softmax(scores, dim=-1)  #(batch_size, num_heads, seq_length, seq_length)
+        scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+        probs = F.softmax(scores, dim=-1)
         probs = self.attn_dropout(probs)
         
-        output = torch.matmul(probs, v).transpose(1, 2).reshape(batch_size, seq_length, embed_dim)  # .reshape(B, N, C), batch_size, num_heads, seq_length, head_dim) -> (batch_size, seq_length, embed_dim)
+        output = torch.matmul(probs, v).transpose(1, 2).contiguous().view(batch_size, seq_len, embed_dim)  # .reshape(B, N, C)
         
         # Final projection
         output = self.proj(output)  #(batch_size, seq_length, embed_dim)
@@ -89,13 +92,13 @@ class MultiHeadSelfAttention(nn.Module):
         return output
 
 class MLP(nn.Module):
-    def __init__(self, embed_dim=64, mlp_dim=256, dropout=0.1, bias=True) -> None:
+    def __init__(self, embed_dim, mlp_dim, dropout=0.1) -> None:
         super(MLP, self).__init__()
-        self.fc1 = nn.Linear(embed_dim, mlp_dim, bias=bias)
+        self.fc1 = nn.Linear(embed_dim, mlp_dim)
         self.act = nn.GELU()
         self.dropout1 = nn.Dropout(dropout)
         
-        self.fc2 = nn.Linear(mlp_dim, embed_dim, bias=bias)
+        self.fc2 = nn.Linear(mlp_dim, embed_dim)
         self.dropout2 = nn.Dropout(dropout)
 
     def forward(self, x) -> torch.Tensor:
@@ -107,9 +110,9 @@ class MLP(nn.Module):
         return x
 
 class Block(nn.Module):
-    def __init__(self, embed_dim=64, num_heads=4, mlp_dim=256, dropout=0.1, qkv_bias=False) -> None:
+    def __init__(self, embed_dim, num_heads, mlp_dim, dropout=0.1) -> None:
         super(Block, self).__init__()
-        self.attn = MultiHeadSelfAttention(embed_dim, num_heads, qkv_bias=qkv_bias, dropout=dropout)
+        self.attn = MultiHeadSelfAttention(embed_dim, num_heads, dropout=dropout)
         self.LayerNorm1 = nn.LayerNorm(embed_dim)
     
         self.mlp = MLP(embed_dim, mlp_dim, dropout)
@@ -123,29 +126,31 @@ class Block(nn.Module):
     #여기까지 Encoder 구현 끝!!
     
 class VisionTransformer(nn.Module):
-    def __init__(self, img_size=65, patch_size=8, in_channels=1, num_classes=3, 
-                 embed_dim=64, num_heads=4, num_layers=8, qkv_bias=False, mlp_dim=256, dropout=0.1) -> None:
+    def __init__(self, img_size=65, patch_size=13, in_channels=1, num_classes=3, 
+                 embed_dim=64, num_heads=4, num_layers=8, mlp_dim=256, dropout=0.1) -> None:
         super(VisionTransformer, self).__init__()
         
-        self.num_classes = num_classes
-        self.num_features = self.embed_dim = embed_dim
+        self.patch_embedding = EmbeddingLayer(img_size, patch_size, in_channels, embed_dim)
         
-        self.embedding = EmbeddingLayer(img_size, patch_size, in_channels, embed_dim)
-        
-        self.blocks = nn.Sequential(*[
-            Block(
-                embed_dim=embed_dim, num_heads=num_heads, mlp_dim=mlp_dim, qkv_bias=qkv_bias, dropout=dropout)
+        self.blocks = nn.ModuleList([
+            Block(embed_dim=embed_dim, num_heads=num_heads, mlp_dim=mlp_dim, dropout=dropout)
             for _ in range(num_layers)])
         
         self.norm = nn.LayerNorm(embed_dim)
         
-        self.head = nn.Linear(self.num_features, num_classes)
+        self.num_features = embed_dim
+        self.head = nn.Sequential(
+            nn.Linear(self.num_features, mlp_dim),
+            nn.GELU(),
+            nn.Linear(mlp_dim, num_classes),
+        )
 
     def forward(self, x):
-        x = x.permute(0, 3, 1, 2)
-        x = self.embedding(x)  #(batch_size, num_patches + 1, embed_dim)
+        x = self.patch_embedding(x)  #(batch_size, num_patches + 1, embed_dim)
         
-        x = self.blocks(x)
+        # x = self.blocks(x)
+        for block in self.blocks:
+            x = block(x)
         
         x = self.norm(x)
         
