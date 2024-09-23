@@ -78,14 +78,13 @@ class MultiHeadSelfAttention(nn.Module):
         qkv = qkv.permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
         
-        # Compute scaled dot-product attention
+        # attention
         scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
         probs = F.softmax(scores, dim=-1)
         probs = self.attn_dropout(probs)
         
         output = torch.matmul(probs, v).transpose(1, 2).contiguous().view(batch_size, seq_len, embed_dim)  # .reshape(B, N, C)
         
-        # Final projection
         output = self.proj(output)  #(batch_size, seq_length, embed_dim)
         output = self.proj_dropout(output)
         
@@ -146,7 +145,7 @@ class VisionTransformer(nn.Module):
         )
 
     def forward(self, x):
-        x = self.patch_embedding(x)  #(batch_size, num_patches + 1, embed_dim)
+        x = self.patch_embedding(x)
         
         # x = self.blocks(x)
         for block in self.blocks:
@@ -154,7 +153,7 @@ class VisionTransformer(nn.Module):
         
         x = self.norm(x)
         
-        x = x[:, 0]  # Extract the class token
+        x = x[:, 0]  # class token
         x = self.head(x)
         
         return x

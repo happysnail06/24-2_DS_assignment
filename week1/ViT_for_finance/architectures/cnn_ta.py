@@ -14,32 +14,26 @@ class CNN(nn.Module):
         """
         super(CNN, self).__init__()
         
-        # First Convolutional Layer
         self.conv1 = nn.Conv2d(
             in_channels=input_channels,
             out_channels=32,
             kernel_size=5,
-            padding=2  # To maintain spatial dimensions (same padding)
+            padding=2
         )
         
-        # Second Convolutional Layer
         self.conv2 = nn.Conv2d(
             in_channels=32,
             out_channels=64,
             kernel_size=5,
-            padding=2  # To maintain spatial dimensions
+            padding=2
         )
         
-        # Max Pooling Layer
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
         
-        # Dropout Layers
-        self.dropout1 = nn.Dropout(p=0.25)  # First Dropout
-        self.dropout2 = nn.Dropout(p=0.5)   # Second Dropout
+        self.dropout1 = nn.Dropout(p=0.25)
+        self.dropout2 = nn.Dropout(p=0.5)
         
-        # Fully Connected Layers
         self.fc1 = nn.Linear(in_features=64 * 32 * 32, out_features=128)
-        
         self.fc2 = nn.Linear(in_features=128, out_features=num_classes)
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -56,7 +50,6 @@ class CNN(nn.Module):
         x = F.relu(x)
         
         x = self.pool(x)
-        
         x = self.dropout1(x)
         
         x = x.contiguous().view(x.size(0), -1)
@@ -65,7 +58,6 @@ class CNN(nn.Module):
         x = F.relu(x)
 
         x = self.dropout2(x)
-        
-        x = self.fc2(x)
+        x = self.fc2(x)        
         
         return x
